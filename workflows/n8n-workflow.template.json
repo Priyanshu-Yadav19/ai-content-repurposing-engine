@@ -1,0 +1,498 @@
+{
+  "name": "Video-to-LinkedIn Post Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-repurpose",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "REPLACE_UUID",
+      "name": "1) Webhook - Input (video_url only)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "REPLACE_UUID"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "ceo_post",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REPLACE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REPLACE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_UUID",
+      "name": "3) Google Sheets - Read CEO_Posts",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1776,
+        -16
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jTDnSMmUbm1EZYvp",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst posts = rows.map(r => (r.Post || r.post || '').toString().trim()).filter(Boolean);\n\nif (posts.length < 3) {\n  throw new Error('CEO_Posts sheet must have at least 3 posts in a column named \"Post\".');\n}\n\nconst lastN = posts.slice(-Number($json.max_posts || 10));\nconst sample_posts = lastN.join('\\n---\\n');\n\nreturn [{ json: { sample_posts } }];"
+      },
+      "id": "REPLACE_UUID",
+      "name": "4) Build sample_posts (last 10 rows)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gladia.io/v2/pre-recorded",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-gladia-key",
+              "value": "REPLACE_UUID"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "audio_url",
+              "value": "={{$json.body.audio_url}}\n"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "REPLACE_UUID",
+      "name": "5) STT - Gladia Submit (video_url -> job)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $json.id || $json.data?.id;\nif (!id) throw new Error('Gladia did not return a job id.');\nreturn [{ json: { ...$json, transcription_id: id } }];"
+      },
+      "id": "REPLACE_UUID",
+      "name": "6) Store transcription_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 20,
+        "unit": "seconds"
+      },
+      "id": "REPLACE_UUID",
+      "name": "7) Wait 20s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        912,
+        304
+      ],
+      "webhookId": "REPLACE_UUID"
+    },
+    {
+      "parameters": {
+        "url": "={{'https://api.gladia.io/v2/pre-recorded/' + $json.transcription_id}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-gladia-key",
+              "value": "REPLACE_UUID"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "REPLACE_UUID",
+      "name": "8) STT - Gladia Poll (get result)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1120,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.status}}",
+              "operation": "equal",
+              "value2": "done"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "REPLACE_UUID",
+      "name": "9) IF status == done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Check status first (different APIs return different fields)\nconst status =\n  $json.status ||\n  $json.result?.status ||\n  $json.data?.status ||\n  $json.transcription?.status ||\n  \"unknown\";\n\nif (status !== \"done\" && status !== \"completed\") {\n  // If not done, return empty and let IF/loop handle waiting\n  return [{ json: { status, transcript_clean: \"\" } }];\n}\n\n// 2) Try multiple common paths for transcript text\nconst transcript =\n  $json.transcription?.full_text ||\n  $json.transcription?.text ||\n  $json.result?.transcription?.full_text ||\n  $json.result?.transcription?.text ||\n  $json.result?.full_text ||\n  $json.result?.text ||\n  $json.full_text ||\n  $json.text ||\n  \"\";\n\n// 3) If still empty, return status + whole json hint\nif (!transcript || transcript.trim().length < 20) {\n  return [{ json: { status, transcript_clean: \"\", debug_keys: Object.keys($json) } }];\n}\n\n// 4) Clean transcript\nconst cleaned = transcript\n  .replace(/\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\b/g, \" \")\n  .replace(/\\s+/g, \" \")\n  .trim();\n\nreturn [{ json: { status, transcript_clean: cleaned } }];\n"
+      },
+      "id": "REPLACE_UUID",
+      "name": "10) Extract transcript_clean",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "REPLACE_GOOGLE_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"You are a LinkedIn content writer.\\n\\nTranscript:\\n{{ $json.transcript_clean }}\\n\\nCEO writing style examples:\\n{{ $json.sample_posts }}\\n\\nTask:\\nCreate exactly 5 engaging LinkedIn post drafts in the same style and language.\"\n        }\n      ]\n    }\n  ]\n}\n",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "REPLACE_UUID",
+      "name": "12) Gemini - Generate 5 Drafts (style match + language)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2240,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function getGeminiText(input) {\n  if (typeof input === 'string') return input;\n\n  // Gemini-style response\n  const parts = input?.candidates?.[0]?.content?.parts;\n  if (Array.isArray(parts) && parts.length) {\n    return parts.map(p => p?.text ?? '').join('\\n').trim();\n  }\n\n  // fallback\n  return (input?.text ?? '').toString().trim();\n}\n\nfunction stripCodeFences(s) {\n  // If Gemini returns ```json ... ```\n  const fence = s.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/i);\n  return fence ? fence[1].trim() : s.trim();\n}\n\nfunction tryParseJson(s) {\n  try { return JSON.parse(s); } catch (e) { return null; }\n}\n\nfunction extractJsonObject(s) {\n  // try to find a JSON object or array inside text\n  const obj = s.match(/\\{[\\s\\S]*\\}/);\n  if (obj) return tryParseJson(obj[0]);\n  const arr = s.match(/\\[[\\s\\S]*\\]/);\n  if (arr) return tryParseJson(arr[0]);\n  return null;\n}\n\nfunction parseDraftsFromText(raw) {\n  // common patterns: \"Draft 1/5:\", \"LinkedIn Post Draft 1/5:\", etc.\n  const splitRegex = /(Draft\\s*\\d+\\s*\\/\\s*\\d+\\s*:|LinkedIn\\s*Post\\s*Draft\\s*\\d+\\s*\\/\\s*\\d+\\s*:)/ig;\n  const chunks = raw.split(splitRegex).map(x => x.trim()).filter(Boolean);\n\n  // If no recognizable markers, return as one draft\n  if (chunks.length < 2) {\n    return [{ id: 1, post: raw }];\n  }\n\n  // chunks look like: [intro?, \"Draft 1/5:\", text1, \"Draft 2/5:\", text2, ...]\n  const drafts = [];\n  for (let i = 0; i < chunks.length; i++) {\n    const marker = chunks[i];\n    const text = chunks[i + 1];\n\n    if (/draft/i.test(marker) && text) {\n      const idMatch = marker.match(/(\\d+)/);\n      const id = idMatch ? Number(idMatch[1]) : (drafts.length + 1);\n      drafts.push({ id, post: text.trim() });\n      i++; // skip text we just used\n    }\n  }\n\n  return drafts.length ? drafts : [{ id: 1, post: raw }];\n}\n\n// ---------------- main ----------------\nconst raw0 = getGeminiText($json);\nconst raw = stripCodeFences(raw0);\n\n// 1) Try strict JSON\nlet parsed = tryParseJson(raw);\n\n// 2) Try JSON embedded inside text\nif (!parsed) parsed = extractJsonObject(raw);\n\n// 3) If still not JSON, create structure from text\nif (!parsed) {\n  parsed = {\n    style_summary: \"\",\n    drafts: parseDraftsFromText(raw),\n    raw_text: raw\n  };\n}\n\n// Normalize output to always have drafts[]\nconst drafts = Array.isArray(parsed.drafts)\n  ? parsed.drafts\n  : (Array.isArray(parsed) ? parsed : [{ id: 1, post: raw }]);\n\n// Return 1 item per draft (easy for Google Sheets / LinkedIn / approvals)\nreturn drafts.map(d => ({\n  json: {\n    id: d.id ?? null,\n    post: (d.post ?? d.text ?? \"\").toString().trim(),\n    style_summary: parsed.style_summary ?? \"\"\n  }\n}));\n"
+      },
+      "id": "REPLACE_UUID",
+      "name": "13) Parse Gemini JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get full text from previous node\nconst text =\n  $json.post ||\n  $json.text ||\n  \"\";\n\n// Safety check\nif (!text.trim()) {\n  throw new Error(\"No text found to split\");\n}\n\n// Split by draft headings\nconst parts = text\n  .split(/###\\s*LinkedIn Post Draft\\s*\\d+:/i)\n  .map(p => p.trim())\n  .filter(Boolean);\n\n// Safety check\nif (!parts.length) {\n  throw new Error(\"No drafts detected after split\");\n}\n\nconst now = new Date().toISOString();\nconst language = $json.language || \"Unknown\";\n\n// Return one item per draft\nreturn parts.map((draft, index) => ({\n  json: {\n    created_at: now,\n    Language: language,\n    Angle: `Draft ${index + 1}`,\n    Draft: draft,\n    Status: \"Pending\"\n  }\n}));\n"
+      },
+      "id": "REPLACE_UUID",
+      "name": "14) Split drafts into rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "ai post",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REPLACE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REPLACE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "REPLACE_UUID",
+      "name": "15) Save drafts to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        2800,
+        416
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jTDnSMmUbm1EZYvp",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "REPLACE_UUID",
+      "name": "2) Normalize Input1",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3008,
+        416
+      ],
+      "id": "REPLACE_UUID",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1) Webhook - Input (video_url only)": {
+      "main": [
+        [
+          {
+            "node": "2) Normalize Input1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3) Google Sheets - Read CEO_Posts": {
+      "main": [
+        [
+          {
+            "node": "4) Build sample_posts (last 10 rows)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4) Build sample_posts (last 10 rows)": {
+      "main": [
+        [
+          {
+            "node": "12) Gemini - Generate 5 Drafts (style match + language)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5) STT - Gladia Submit (video_url -> job)": {
+      "main": [
+        [
+          {
+            "node": "6) Store transcription_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6) Store transcription_id": {
+      "main": [
+        [
+          {
+            "node": "7) Wait 20s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7) Wait 20s": {
+      "main": [
+        [
+          {
+            "node": "8) STT - Gladia Poll (get result)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8) STT - Gladia Poll (get result)": {
+      "main": [
+        [
+          {
+            "node": "9) IF status == done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9) IF status == done?": {
+      "main": [
+        [
+          {
+            "node": "10) Extract transcript_clean",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "7) Wait 20s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10) Extract transcript_clean": {
+      "main": [
+        [
+          {
+            "node": "3) Google Sheets - Read CEO_Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12) Gemini - Generate 5 Drafts (style match + language)": {
+      "main": [
+        [
+          {
+            "node": "13) Parse Gemini JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13) Parse Gemini JSON": {
+      "main": [
+        [
+          {
+            "node": "14) Split drafts into rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14) Split drafts into rows": {
+      "main": [
+        [
+          {
+            "node": "15) Save drafts to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "15) Save drafts to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2) Normalize Input1": {
+      "main": [
+        [
+          {
+            "node": "5) STT - Gladia Submit (video_url -> job)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "REPLACE_UUID",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "73384867c0143afe208d588842dae0f1c91438307f136e96a032a6e90e239746"
+  },
+  "id": "R8ZkrqpK8NGLxxPYQKzLP",
+  "tags": []
+}
