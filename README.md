@@ -83,8 +83,7 @@ Send JSON like:
 
 ```json
 {
-  "audio_url": "https://your-video-url.mp4",
-  "max_posts": 10
+  "audio_url": "https://your-video-url.mp4"
 }
 ```
 
@@ -104,9 +103,8 @@ curl -X POST "https://YOUR_N8N_HOST/webhook/content-repurpose" \
 
 If you use a Drive link, prefer a **direct download** format like:
 
-- `https://drive.google.com/uc?export=download&id=FILE_ID`
+- `Your video link (you tube)`
 
-And make sure the file is **publicly accessible**, otherwise Gladia can’t fetch it.
 
 ---
 
